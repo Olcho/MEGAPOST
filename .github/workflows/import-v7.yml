@@ -1,0 +1,24 @@
+name: Import MEGAPOST v7 source
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'releases/megapost-v7.part*.b64'
+      - '.github/workflows/import-v7.yml'
+permissions:
+  contents: write
+jobs:
+  restore:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: true
+      - name: Extract version 7 source
+        shell: bash
+        run: |
+          cat releases/megapost-v7.part*.b64 | base64 --decode | tar -xJf - -C .
+          git add .gitignore README.md docs index.html package.json package-lock.json src tests tsconfig.json vite.config.ts
+          if git diff --cached --quiet; then exit 0; fi
+          git -c user.name='github-actions[bot]' -c user.email='41898282+github-actions[bot]@users.noreply.github.com' commit -m 'Import MEGAPOST v7 source'
+          git push
