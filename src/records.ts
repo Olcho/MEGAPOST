@@ -34,6 +34,12 @@ export const files = [
   },
   {
     source: "authored" as const,
+    id: "E15.b",
+    name: "MP-H07 기체 정비 기록",
+    body: "보행 센서, 손끝 촉각 장치, 얼굴 표정 모듈 정상. 고용 계약 자료 없음. 오전 08:00 시작되는 테스트 세션의 감사 자료만 보존된다.",
+  },
+  {
+    source: "authored" as const,
     id: "E12.c",
     name: "윤서가 남긴 회선 복구 기록",
     body: "“끊었더니 냉장 차량도 멈춰서 안전장치가 관제를 다시 올렸어요. 다음번엔 07:58에 시 안전망부터 잡으세요.”",
@@ -48,5 +54,5 @@ export function notebook(state: State) {
   );
   return key
     ? memory(key)[1]
-    : "배송 중 얻은 사고 기록은 다음 근무에도 남습니다.";
+    : "업무 중 발견한 기록은 다음 근무에도 남습니다.";
 }

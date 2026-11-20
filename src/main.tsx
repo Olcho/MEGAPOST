@@ -6,23 +6,31 @@ import {
   decode,
   empty,
   legacyKey,
+  priorKey,
+  previousKey,
   read,
   replay,
   storageKey,
   type Save,
 } from "./save";
 import { DispatchDesk } from "./DispatchDesk";
+import { TerminalScreen } from "./TerminalScreen";
 import { files } from "./records";
+import { secretFiles, secretContents } from "./terminal";
 import "./style.css";
 
 const findAction = (id: string) => actions.find((action) => action.id === id)!;
 const pad = (n: number) => String(n).padStart(2, "0");
 const navigation = [
   ["desk", "▤", "배송 관제"],
-  ["archive", "▥", "기록 보관함"],
-  ["ends", "◈", "결과 도감"],
-  ["settings", "⚙", "설정"],
+  ["terminal", ">_", "터미널"],
 ] as const;
+const recordsNavigation = [
+  ["archive", "▧", "기록 보관함"],
+  ["ends", "◈", "결과 도감"],
+] as const;
+const settingsNavigation = ["settings", "⚙", "설정"] as const;
+const allNavigation = [...navigation, ...recordsNavigation, settingsNavigation];
 
 function App() {
   const [boot] = useState(() => {
@@ -56,6 +64,9 @@ function App() {
     !expanded &&
     s.log.some((l) => l.shift < s.shift && l.scene === sceneKey(s));
   const collected = files.filter((f) => s.log.some((l) => l.id === f.id));
+  function openTerminal() {
+    setTab("terminal");
+  }
   useEffect(() => {
     const fn = (e: StorageEvent) => {
       if (e.key === storageKey) {
@@ -72,8 +83,8 @@ function App() {
     window.addEventListener("storage", fn);
     return () => window.removeEventListener("storage", fn);
   }, []);
-  async function update(cmd: string | string[]) {
-    if (lock.current) return;
+  async function update(cmd: string | string[], stayOnTerminal = false, stayOnEve = false): Promise<boolean> {
+    if (lock.current) return false;
     lock.current = true;
     setBusy(true);
     try {
@@ -85,17 +96,19 @@ function App() {
       setState(next);
       setError("");
       setExpanded(false);
-      setTab("desk");
-      requestAnimationFrame(() => {
+      setTab(stayOnTerminal ? "terminal" : "desk");
+      if (!stayOnTerminal && !stayOnEve) requestAnimationFrame(() => {
         heading.current?.focus({ preventScroll: true });
         window.scrollTo(0, 0);
       });
+      return true;
     } catch (e) {
       setError(
         e instanceof Error
           ? e.message
           : "저장 실패. 현재 화면에서 다시 시도하세요.",
       );
+      return false;
     } finally {
       lock.current = false;
       setBusy(false);
@@ -108,6 +121,15 @@ function App() {
       return false;
     }
   });
+  const [previousAvailable] = useState(() => {
+    try { return localStorage.getItem(previousKey) !== null; }
+    catch { return false; }
+  });
+  const [priorAvailable] = useState(() => {
+    try { return localStorage.getItem(priorKey) !== null; }
+    catch { return false; }
+  });
+
   function download(key = storageKey) {
     try {
       const blob = new Blob(
@@ -117,8 +139,13 @@ function App() {
       const url = URL.createObjectURL(blob);
       const a = document.createElement("a");
       a.href = url;
-      a.download =
-        key === legacyKey ? "human-first-v1.json" : "megapost-dispatch-v2.json";
+      a.download = key === legacyKey
+        ? "human-first-v1.json"
+        : key === priorKey
+          ? "megapost-dispatch-v2.json"
+          : key === previousKey
+            ? "megapost-android-v3.json"
+            : "megapost-terminal-v5.json";
       a.click();
       setTimeout(() => URL.revokeObjectURL(url), 1000);
     } catch {
@@ -140,16 +167,32 @@ function App() {
       </header>
       <div className="shell">
         <nav aria-label="관제 메뉴">
-          {navigation.map(([key, icon, label]) => (
-            <button
-              key={key}
-              aria-current={tab === key ? "page" : undefined}
-              onClick={() => setTab(key)}
-            >
-              <span aria-hidden="true">{icon}</span>
-              {label}
+          <div className="nav-game">
+            <span className="nav-caption">업무</span>
+            {navigation.map(([key, icon, label]) => (
+              <button
+                key={key}
+                aria-current={tab === key ? "page" : undefined}
+                onClick={() => key === "terminal" ? openTerminal() : setTab("desk")}
+              >
+                <span aria-hidden="true">{icon}</span>
+                {label}
+              </button>
+            ))}
+          </div>
+          <div className="nav-records">
+            <span className="nav-caption">기록</span>
+            {recordsNavigation.map(([key, icon, label]) => (
+              <button key={key} aria-current={tab === key ? "page" : undefined} onClick={() => setTab(key)}>
+                <span aria-hidden="true">{icon}</span>{label}
+              </button>
+            ))}
+          </div>
+          <div className="nav-settings">
+            <button aria-current={tab === "settings" ? "page" : undefined} onClick={() => setTab("settings")}>
+              <span aria-hidden="true">{settingsNavigation[1]}</span>{settingsNavigation[2]}
             </button>
-          ))}
+          </div>
           <div className="operator">
             <b>신입 배송 운영 관리자</b>
             <span>마포 허브</span>
@@ -157,7 +200,7 @@ function App() {
         </nav>
         <main>
           <div className="location">
-            <b>{navigation.find(([key]) => key === tab)?.[2]}</b>
+            <b>{allNavigation.find(([key]) => key === tab)?.[2]}</b>
             <span>
               서울 2080　·　근무 {pad(s.shift)}　
               {scene(s.event)?.time ?? "교대 종료"}
@@ -176,16 +219,14 @@ function App() {
               heading={heading}
               advance={update}
               expand={() => setExpanded(true)}
+              openTerminal={openTerminal}
+              sendEve={(message) => update(`eve:${message}`, false, true)}
             />
+          ) : tab === "terminal" ? (
+            <TerminalScreen state={s} busy={busy} send={(command) => update(`term:${command}`, true)} returnToDesk={() => setTab("desk")} />
           ) : (
-            <section className="panel">
-              <h1>
-                {tab === "archive"
-                  ? "기록 보관함"
-                  : tab === "ends"
-                    ? "결과 도감"
-                    : "단말 설정"}
-              </h1>
+            <section className="panel library-panel">
+              <h1>{allNavigation.find(([key]) => key === tab)?.[2]}</h1>
               {tab === "archive" ? (
                 <>
                   <h2>보존한 기억 · {s.memory.length}</h2>
@@ -206,6 +247,17 @@ function App() {
                       {f.body}
                     </article>
                   ))}
+                  {s.secrets.length > 0 && <>
+                    <h2>복구한 비공개 감사 조각 · {s.secrets.length}</h2>
+                    {s.secrets.map((key) => {
+                      const file = secretFiles.find(f => f.id === key);
+                      return <article key={key}>
+                        <small>{file?.id} / 비공개 원본</small>
+                        <h3>{file?.name}</h3>
+                        <p style={{whiteSpace:"pre-wrap"}}>{secretContents[key]}</p>
+                      </article>;
+                    })}
+                  </>}
                   <h2>내 근무 기록</h2>
                   {Array.from(new Set(s.log.map((l) => l.shift)))
                     .reverse()
@@ -231,8 +283,10 @@ function App() {
                   {s.endings.map((id) => (
                     <article key={id}>
                       <small>
-                        {id === "K4"
-                          ? "진엔딩"
+                        {id === "K5"
+                          ? "히든엔딩"
+                          : id === "K4"
+                            ? "진엔딩"
                           : id.startsWith("F")
                             ? "실패"
                             : "부분 성공"}{" "}
@@ -277,6 +331,16 @@ function App() {
                       기존 HUMAN FIRST 저장 내려받기
                     </button>
                   )}
+                  {previousAvailable && (
+                    <button onClick={() => download(previousKey)}>
+                      반전 개편판 v3 저장 내려받기
+                    </button>
+                  )}
+                  {priorAvailable && (
+                    <button onClick={() => download(priorKey)}>
+                      이전 MEGAPOST 저장 내려받기
+                    </button>
+                  )}
                   <input
                     hidden
                     type="file"
@@ -294,7 +358,7 @@ function App() {
                       } catch (e) {
                         setError(
                           e instanceof Error &&
-                            e.message.includes("HUMAN FIRST")
+                            (e.message.includes("HUMAN FIRST") || e.message.includes("이전 MEGAPOST") || e.message.includes("이전 개편판"))
                             ? e.message
                             : "유효한 MEGAPOST 저장 파일이 아닙니다.",
                         );
@@ -304,7 +368,7 @@ function App() {
                   <button
                     onClick={() => {
                       if (
-                        confirm("MEGAPOST 근무 기록과 기억을 초기화할까요?")
+                        confirm("이번 개편판의 근무 기록과 기억을 초기화할까요? 이전 판의 저장은 유지됩니다.")
                       ) {
                         if (boot.err) {
                           localStorage.removeItem(storageKey);

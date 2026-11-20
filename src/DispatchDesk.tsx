@@ -10,13 +10,9 @@ import {
   scene,
 } from "./engine";
 import { DispatchMap } from "./DispatchMap";
-import { notebook } from "./records";
-
-const fleet = [
-  { id: "D-204", name: "냉장 드론", detail: "마포 → 신촌" },
-  { id: "V-118", name: "예비 무인차", detail: "영등포 차고지" },
-  { id: "R-771", name: "단지 배송 로봇", detail: "서부 배송 구역" },
-];
+import { EVEPanel } from "./EVEPanel";
+import { debrief } from "./debrief";
+import { terminalGuidance } from "./terminalGuidance";
 
 export function DispatchDesk({
   state,
@@ -25,6 +21,8 @@ export function DispatchDesk({
   heading,
   advance,
   expand,
+  openTerminal,
+  sendEve,
 }: {
   state: State;
   busy: boolean;
@@ -32,20 +30,14 @@ export function DispatchDesk({
   heading: RefObject<HTMLHeadingElement | null>;
   advance: (id: string) => void;
   expand: () => void;
+  openTerminal: () => void;
+  sendEve: (message: string) => Promise<boolean>;
 }) {
   const event = scene(state.event);
   const terminal = isEnd(state.event);
   const welcome = state.event === "E01";
   const current = state.log.filter((entry) => entry.shift === state.shift);
-  const lastHere = state.log
-    .filter(
-      (entry) =>
-        entry.shift < state.shift &&
-        actions.find((a) => a.id === entry.id)?.event === state.event,
-    )
-    .at(-1);
-  const lastAction = lastHere && actions.find((a) => a.id === lastHere.id);
-  const received = ["K2", "K3", "K4"].includes(state.event);
+  const received = ["E15", "E16", "K2", "K3", "K4", "K5"].includes(state.event);
   const beforeIncident = welcome || state.event === "E13";
   const drone = received
     ? "화물 인계"
@@ -68,38 +60,74 @@ export function DispatchDesk({
     : current.some((entry) => entry.id === "E06.c")
       ? "환승장 확인 완료"
       : "대기";
-  const labels = [drone, reserve, robot];
-  const eveMessage =
-    state.event === "E03"
-      ? state.memory.includes("W")
-        ? "지난번 봉인은 남아 있어요. 오늘도 제 증언이 필요하다면 직접 열어 달라고 해 주세요."
-        : "사고 처리 순서를 기억해 두면 다음번에는 관제사가 연결될 때까지 기다리지 않아도 됩니다."
-      : event?.eve;
+  const guidance = terminalGuidance(state);
+  const currentNotice = state.terminal.filter((line) => line.shift === state.shift && line.kind === "system").at(-1);
+  const fleet = [
+    {id:"D-204", name:"냉장 드론", status:drone, related:["E02","E03","E06","E10","E11","E12"].includes(state.event), detail: state.event === "E02" || state.event === "E10" ? "현재: 기체 복구 또는 화물 회수 방식을 선택" : ["E06","E11","E12"].includes(state.event) ? "핵심: 도착 기록과 실물 위치를 대조" : "배송 대상: 신촌 진료소 냉장 화물"},
+    {id:"V-118", name:"예비 무인차", status:reserve, related:["E04","E06"].includes(state.event), detail:state.flags.includes("reserveUsed") ? "오전 픽업에 투입. 오후 현장 스캔에 사용 불가" : state.event === "E04" ? "지금 쓰면 기사 휴게는 지키지만 오후엔 사용할 수 없음" : state.event === "E06" ? "가용: 환승장 봉인 확인에 사용할 수 있음" : "영등포 차고지의 대기 차량"},
+    {id:"R-771", name:"단지 배송 로봇", status:robot, related:state.event === "E05", detail:state.event === "E05" ? "확인할 것: 주문 15동, 사진 51동" : current.some((entry) => entry.id === "E05.b") ? "51동 오배송을 확인하고 15동에 재전달" : "해당 사건이 오면 사진과 실제 주소를 대조"},
+  ];
   const isFailure = state.event.startsWith("F");
   const resolution =
-    state.event === "K4"
-      ? "진엔딩"
+    state.event === "K5"
+      ? "히든엔딩"
+      : state.event === "K4"
+        ? "진엔딩"
       : isFailure
         ? "근무 종료 · 실패"
         : "근무 종료 · 부분 성공";
 
+  const chapter = state.memory.includes("M6")
+    ? "정체를 알았습니다. 이제 어떤 미래를 선택할지 결정하세요."
+    : state.memory.includes("M5")
+      ? "실제 배송을 지키며 테스트 관제를 중단하세요."
+      : state.memory.includes("M4")
+        ? "내 이름을 사용한 가짜 배송 지시를 추적하세요."
+        : state.shift > 1
+          ? "지난 근무의 기록으로 반복되는 사고를 조사하세요."
+          : "배송 사고를 해결하고 다음 교대 평가를 통과하세요.";
+  const quickFacts: Record<string, [string, string]> = {
+    E02: ["드론: 옥상 비상 착륙", "진료소 마감: 08:40"],
+    E04: ["기사 휴식: 20분 삭제", "예비 무인차: 1대"],
+    E05: ["배달 주소: 15동", "인수 사진: 51동"],
+    E06: ["마감 보고 요청", "실물 위치: 불일치"],
+    E11: ["실물 화물: C-918", "목적지 기록: 2개"],
+    E12: ["현장 스캔: 확보", "내 사번 지시: 2개"],
+    E13: ["현재 시각: 07:58", "외부 회선: 미예약"],
+    E14: ["실제 배송: 안전", "테스트 관제: 차단 가능"],
+    E15: ["직원 명부: 검색 결과 없음", "기체 등록: MP-H07"],
+    E16: ["관제망: 외부로 인계", "자율적인 기록 제출: 가능"],
+  };
+  const available = options(state);
+  const baseChoices = available.filter((a) =>
+    !/\b(?:M[1-9]|W|terminalTrace|identityLead)\b/.test(a.cond),
+  );
+  const unlockedChoices = available.filter((a) =>
+    /\b(?:M[1-9]|W|terminalTrace|identityLead)\b/.test(a.cond),
+  );
+  const choiceButton = (action: (typeof actions)[number]) => (
+    <button
+      key={action.id}
+      data-action={action.id}
+      disabled={busy}
+      onClick={() => advance(action.id)}
+      className={welcome && action.id === "E01.a" ? "primary" : "choice"}
+    >
+      <strong>{action.label}</strong>
+      <span className="hint">{action.hint}</span>
+    </button>
+  );
   const choices = (
-    <div className="choices">
-      {options(state).map((action) => (
-        <button
-          key={action.id}
-          data-action={action.id}
-          disabled={busy}
-          onClick={() => advance(action.id)}
-          className={welcome && action.id === "E01.a" ? "primary" : "choice"}
-        >
-          {action.cond.includes("M") && (
-            <span className="unlock">이전 근무 기록 사용</span>
-          )}
-          <strong>{action.label}</strong>
-          <span className="hint">{action.hint}</span>
-        </button>
-      ))}
+    <div className="choices-section">
+      <div className="choices" aria-label="선택 가능한 행동">
+        {baseChoices.map(choiceButton)}
+      </div>
+      {unlockedChoices.length > 0 && (
+        <div className="unlocked-section">
+          <p className="unlocked-title">이전 근무에서 알아낸 방법</p>
+          <div className="choices">{unlockedChoices.map(choiceButton)}</div>
+        </div>
+      )}
     </div>
   );
 
@@ -107,7 +135,7 @@ export function DispatchDesk({
     <>
       <div className="board">
         <section
-          className={welcome ? "ticket welcome" : "ticket"}
+          className={welcome ? "ticket welcome" : state.memory.includes("M1") && ["E02", "E10"].includes(state.event) ? "ticket anomaly" : "ticket"}
           aria-label="현재 관제 업무"
         >
           {welcome ? (
@@ -122,9 +150,11 @@ export function DispatchDesk({
                 배송은 계속됩니다.
               </p>
               <p>
-                {state.shift === 1
-                  ? "마포 허브에 배정된 신입 배송 운영 관리자입니다. 드론·차량·기사의 배송에 문제가 생기면 직접 대응 방식을 결정합니다."
-                  : "교대 시각입니다. 이전 근무에서 확인한 사고 기록을 이 단말에서 다시 사용할 수 있습니다."}
+                {state.endings.includes("K5")
+                  ? "완료한 이야기는 보존됩니다. 지금부터는 기록에 남은 다른 가능성을 살펴봅니다."
+                  : state.shift === 1
+                    ? "2080년 서울, MEGAPOST 배송관제팀의 첫 출근입니다. 오늘 사고를 처리하고 다음 교대 평가를 통과하세요."
+                    : "다시 오전 08:00입니다. 지난 근무에서 남긴 사고 기록은 여전히 확인할 수 있습니다."}
               </p>
               <div className="current-time">
                 <span>교대 시작</span>
@@ -146,11 +176,11 @@ export function DispatchDesk({
                   <b>자동 관제로 넘긴 지시</b>
                   <ul>
                     {current
-                      .map(({ id }) => actions.find((a) => a.id === id)!)
-                      .filter((a) => a.effect.includes("A+"))
+                      .map(({ id }) => actions.find((a) => a.id === id))
+                      .filter((a): a is NonNullable<typeof a> => Boolean(a?.effect.includes("A+")))
                       .map((action) => (
                         <li key={action.id}>
-                          {scene(action.event).time} · {action.label}
+                          {action && scene(action.event).time} · {action?.label}
                         </li>
                       ))}
                   </ul>
@@ -161,6 +191,18 @@ export function DispatchDesk({
                   <b>종료 기록</b>
                   <p>{state.result}</p>
                 </div>
+              )}
+              {debrief(state) && (
+                <section className="debrief" aria-label="근무 종료 분석">
+                  <span className="debrief-label">이번 근무 분석</span>
+                  <h2>{debrief(state)!.title}</h2>
+                  <p><b>결정적 원인</b>{debrief(state)!.trigger}</p>
+                  <p><b>다음 근무의 실마리</b>{debrief(state)!.next}</p>
+                  <div className="debrief-command">
+                    <span>다음 교대에서 관련 기록을 직접 확인할 수 있습니다.</span>
+                    <button type="button" onClick={() => openTerminal()}>터미널 보기</button>
+                  </div>
+                </section>
               )}
               <Discoveries state={state} />
               <details>
@@ -174,11 +216,12 @@ export function DispatchDesk({
                 disabled={busy}
                 onClick={() => advance("@")}
               >
-                {state.event === "K4" ? "다른 판정 사본 열기" : "다시 출근"}
+                {state.event === "K5" ? "완료 기록에서 다른 선택 살펴보기" : "다시 출근"}
               </button>
             </>
           ) : (
             <>
+              <div className="chapter-label"><span>현재 목표</span>{chapter}</div>
               <p className="kicker">
                 {event.channel} <span>{event.time}</span>
               </p>
@@ -186,39 +229,35 @@ export function DispatchDesk({
                 {event.name}
               </h1>
               <div className="goal">
-                <small>지금 할 일</small>
+                <small>지금 해결할 문제</small>
                 <strong>{event.goal}</strong>
               </div>
-              {compact ? (
-                <button className="minor" onClick={expand}>
-                  읽은 상황 다시 펼치기
-                </button>
-              ) : (
-                <p>{event.body}</p>
-              )}
-              {state.event === "E02" && (
-                <dl className="manifest">
-                  <div>
-                    <dt>화물</dt>
-                    <dd>진료소 냉장 모듈</dd>
-                  </div>
-                  <div>
-                    <dt>도착 요청</dt>
-                    <dd>08:40</dd>
-                  </div>
-                  <div>
-                    <dt>기체 상태</dt>
-                    <dd>옥상 안전 착륙</dd>
-                  </div>
-                </dl>
-              )}
-              {eveMessage && (
-                <div className="eve">
-                  <b>
-                    EVE <span>관제 보조</span>
-                  </b>
-                  <p>{eveMessage}</p>
+              {quickFacts[state.event] && (
+                <div className="quick-facts">
+                  {quickFacts[state.event].map((fact) => (
+                    <span key={fact}>{fact}</span>
+                  ))}
                 </div>
+              )}
+              {state.event === "E15" && (
+                <div className="reveal-card" aria-label="인간형 로봇의 정체 공개">
+                  <div className="reveal-badge">HUMAN EMULATION TEST / H07</div>
+                  <div className="reveal-figure" aria-hidden="true">
+                    <div className="reveal-head" />
+                    <div className="reveal-body" />
+                    <span className="reveal-scan" />
+                  </div>
+                  <div className="reveal-identity">
+                    <span>고용 기록 없음</span>
+                    <b>인간형 자율판단 로봇</b>
+                    <small>MP-H07 · 재실행 테스트 · 기억 보존: 안전 감사 구역</small>
+                  </div>
+                </div>
+              )}
+              {compact ? (
+                <button className="minor" onClick={expand}>상황 설명 다시 보기</button>
+              ) : (
+                <p className="scene-body">{event.body}</p>
               )}
               {state.event === "E07" && (
                 <p className="evidence">{judgment(state)}</p>
@@ -246,48 +285,53 @@ export function DispatchDesk({
                   </p>
                 )}
               {state.result && (
-                <div className="dispatch">
-                  <b>직전 처리 결과</b>
+                <div className="dispatch recent-result">
+                  <b>방금 한 일의 결과</b>
                   <p>{state.result}</p>
                 </div>
               )}
               <Discoveries state={state} />
+              {guidance.length > 0 && (
+                <section className="desk-investigation" aria-label="터미널 조사 연결">
+                  <span>터미널에서 확인할 일</span>
+                  <strong className="desk-investigation-title">{guidance[0].title}</strong><p>{guidance[0].detail}</p>
+                  <button type="button" onClick={() => openTerminal()}>
+                    터미널 열기 →
+                  </button>
+                </section>
+              )}
+              {currentNotice && (
+                <button type="button" className="desk-notification" onClick={() => openTerminal()}>
+                  <span>터미널 수신 기록</span>
+                  <strong>{currentNotice.text.split("\n")[0]}</strong>
+                  <small>터미널에서 자세히 보기 →</small>
+                </button>
+              )}
+              {state.flags.includes("terminalTrace") && ["E02", "E10"].includes(state.event) && (
+                <div className="route-unlock-banner" role="status">
+                  <strong>새 대응 발견: 강변 우회</strong>
+                  <span>터미널에서 확보한 비행기록이 적용됐습니다. 아래의 새 선택지를 확인하세요.</span>
+                </div>
+              )}
               {choices}
             </>
           )}
         </section>
         <aside className="operations" aria-label="배송망과 장비 현황">
           <DispatchMap state={state} />
-          <section className="fleet">
-            <h2>배송 장비</h2>
-            {fleet.map(({ id, name, detail }, index) => (
-              <div className="asset" key={id}>
-                <div>
-                  <b>{name}</b>
-                  <small>
-                    {id} · {detail}
-                  </small>
+          <section className="fleet" aria-label="배송 장비 활용 현황">
+            <div className="fleet-title"><h2>배송 장비</h2><span>업무 선택에 영향을 주는 자원</span></div>
+            {fleet.map(({ id, name, status, related, detail }) => (
+              <div className={related ? "asset relevant" : "asset"} key={id}>
+                <div className="asset-main">
+                  <div><b>{name}</b><small>{id}</small></div>
+                  <span className={status === "통신 두절" ? "offline" : "asset-status"}>{status}</span>
                 </div>
-                <span
-                  className={labels[index] === "통신 두절" ? "offline" : ""}
-                >
-                  {labels[index]}
-                </span>
+                <p>{detail}</p>
               </div>
             ))}
           </section>
-          {!welcome && (
-            <details className="fleet">
-              <summary>이전 근무와 조사 수첩</summary>
-              {lastAction && (
-                <p>지난번 여기서 선택한 행동 · {lastAction.label}</p>
-              )}
-              <p>{notebook(state)}</p>
-              {state.flags.includes("witness") && (
-                <p>EVE가 오늘의 증언 요청을 수락했습니다.</p>
-              )}
-            </details>
-          )}
+          <EVEPanel state={state} busy={busy} send={sendEve} />
         </aside>
       </div>
     </>

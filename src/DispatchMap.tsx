@@ -19,8 +19,19 @@ export function DispatchMap({ state }: { state: State }) {
   const route = state.flags.find((flag) =>
     ["north", "river", "ground", "parked"].includes(flag),
   );
-  const handoff = ["E14", "K2", "K3", "K4"].includes(state.event);
+  const handoff = ["E14", "E15", "E16", "K2", "K3", "K4", "K5"].includes(state.event);
   const beforeIncident = state.event === "E01" || state.event === "E13";
+  const routeEvidence = state.flags.includes("terminalTrace") && ["E02", "E10"].includes(state.event);
+  const ghostSignal = state.memory.includes("M1") && ["E02", "E10", "E06", "E11", "E12"].includes(state.event);
+  const mismatch = ["E06", "E11", "E12", "E14", "E15", "E16", "F3", "F4", "K2", "K3", "K4", "K5"].includes(state.event);
+  const confirmed = ["E11", "E12", "E14", "E15", "E16", "F3", "F4", "K2", "K3", "K4", "K5"].includes(state.event);
+  const mapFacts = beforeIncident
+    ? { screen: "배송 예정", field: "운항 전", note: "마포 허브에서 신촌 진료소로 보내는 배송 계획입니다." }
+    : handoff
+      ? { screen: "외부 인계 진행", field: "냉장 차량 확보", note: "실제 화물은 외부 관제망으로 인계됩니다." }
+      : mismatch
+        ? { screen: "진료소 도착 표시", field: confirmed ? "환승장 실물 확인" : "환승장 현장 제보", note: confirmed ? "화물은 환승장에서 확인됐지만 전산에는 진료소 인계로 기록되어 있습니다." : "현장 기사에게서 도착하지 않은 화물에 관한 연락이 왔습니다." }
+        : { screen: "D-204 사고 처리", field: state.flags.includes("ground") ? "환승장 냉장 차량 회수" : state.flags.includes("river") ? "강변 우회 기록 확보" : "옥상 안전 착륙", note: "표시된 경로는 관제 경로입니다. 화물의 실제 도착 여부는 별도로 확인해야 합니다." };
 
   useEffect(() => {
     const element = canvas.current;
@@ -150,6 +161,24 @@ export function DispatchMap({ state }: { state: State }) {
       2,
       !handoff && route !== "north",
     );
+    if (routeEvidence) {
+      // Researched option only: do not portray it as the route the drone is already taking.
+      line([[102, 211], [162, 229], [222, 197], [257, 119]], "#82c9fc", 3, true);
+      ctx.fillStyle = "#a6dcff";
+      ctx.font = "700 12px system-ui";
+      ctx.fillText("확인된 우회 후보", 116, 245);
+    }
+    if (ghostSignal) {
+      // Residual telemetry is not a second verified delivery route.
+      line([[102, 211], [148, 170], [257, 119], [342, 92], [445, 81]], "#8b7ad2", 1.3, true);
+      ctx.beginPath();
+      ctx.arc(257, 119, 23, 0, Math.PI * 2);
+      ctx.strokeStyle = "#9b8ce2";
+      ctx.lineWidth = 1.3;
+      ctx.setLineDash([3, 6]);
+      ctx.stroke();
+      ctx.setLineDash([]);
+    }
     stations.forEach(({ x, y, label, sub, color }) => {
       ctx.beginPath();
       ctx.arc(x, y, 10, 0, Math.PI * 2);
@@ -169,16 +198,22 @@ export function DispatchMap({ state }: { state: State }) {
       ctx.font = "11px system-ui";
       ctx.fillText(sub, x + 22, y + 10);
     });
-  }, [route, handoff, beforeIncident]);
+  }, [route, handoff, beforeIncident, ghostSignal, routeEvidence]);
 
   return (
     <section className="map-panel" aria-label="서울 서부 배송 경로">
       <div className="map-heading">
-        <h2>서울 서부 배송망</h2>
+        <h2>배송망 · 관제 상황</h2>
         <span>
           <i /> 관제 구역 04
         </span>
       </div>
+      <div className="map-readout" aria-label="화물 위치 정보">
+        <div><small>시스템 표시</small><strong>{mapFacts.screen}</strong></div>
+        <div className={mismatch && !handoff ? "map-conflict" : ""}><small>현장 상태</small><strong>{mapFacts.field}</strong></div>
+      </div>
+      <p className="map-explainer">{mapFacts.note}</p>
+      <div className={ghostSignal ? "map-canvas-wrap signal-active" : "map-canvas-wrap"}>
       <canvas
         ref={canvas}
         width={1090}
@@ -186,6 +221,20 @@ export function DispatchMap({ state }: { state: State }) {
         role="img"
         aria-label="마포 허브에서 서부 환승장을 지나 신촌 진료소로 가는 배송 경로. 영등포에는 예비 차량이 있다."
       />
+      {ghostSignal && <span className="ghost-pulse" aria-hidden="true" />}
+      </div>
+      {routeEvidence && (
+        <div className="map-route-discovery" role="status">
+          <strong>비행기록에서 강변 우회로를 확인했습니다.</strong>
+          <small>지도에 표시된 파란 점선은 운항 후보입니다. 아직 재출발 명령을 내리지 않았습니다.</small>
+        </div>
+      )}
+      {ghostSignal && (
+        <div className="ghost-signal" aria-label="미확인 잔류 신호">
+          <span className="ghost-signal-icon" aria-hidden="true">◌</span>
+          <div><strong>미확인 잔류 신호</strong><small>이전 근무의 08:12 궤적이 현재 지도에 겹칩니다. 실제 화물의 위치로 확인된 것은 아닙니다.</small></div>
+        </div>
+      )}
       <div className="map-legend">
         <span>
           <i className="route-key" />{" "}

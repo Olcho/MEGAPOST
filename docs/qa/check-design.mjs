@@ -10,6 +10,7 @@ import {
   isEnd,
 } from "../../src/engine.ts";
 import { decode, replay, empty } from "../../src/save.ts";
+import { terminalGuidance } from "../../src/terminalGuidance.ts";
 
 // Each profile represents the complete durable set of knowledge at the gate.
 const profiles = [[]],
@@ -41,17 +42,28 @@ function visit(s, depth, trail) {
   }
   assert.ok(!trail.includes(s.event), "cycle: " + s.event);
   nodes.add(s.event);
-  const available = options(s);
-  assert.ok(available.length);
-  if (s.event === "E08") assert.equal(available.length, 1);
-  for (const a of actions.filter(
-    (a) => a.event === s.event && !available.includes(a),
-  )) {
-    assert.throws(() => step(s, a.id));
+  const variants = [s];
+  if (s.event === "E04") variants.push(step(s, "eve:상점 일정 다시 잡을 수 있어?"));
+  if (s.event === "E05") variants.push(step(s, "term:auth request photo"));
+  if (s.event === "E02" && s.memory.includes("M1")) {
+    const authorized = step(s, "term:auth request flight");
+    variants.push(step(authorized, "term:logs D-204"));
   }
-  for (const a of available) {
-    seen.add(a.id);
-    visit(step(s, a.id), depth, [...trail, s.event]);
+  if (s.event === "E14" && s.memory.includes("M4") && s.flags.includes("witness")) {
+    const authorized = step(s, "term:auth request audit");
+    variants.push(step(authorized, "term:inspect MP-S17"));
+  }
+  for (const v of variants) {
+    const available = options(v);
+    assert.ok(available.length);
+    if (v.event === "E08") assert.equal(available.length, 1);
+    for (const a of actions.filter(
+      (a) => a.event === v.event && !available.includes(a),
+    )) assert.throws(() => step(v, a.id));
+    for (const a of available) {
+      seen.add(a.id);
+      visit(step(v, a.id), depth, [...trail, v.event]);
+    }
   }
 }
 for (let i = 0; i < profiles.length; i++)
@@ -67,7 +79,76 @@ assert.deepEqual(first, {
   K3: 2,
   F4: 3,
   K4: 4,
+  K5: 4,
 });
+assert.ok(seen.has("E04.d"), "EVE-coordinated pickup must be reachable");
+assert.ok(seen.has("E05.d"), "Photo-auth choice must be reachable");
+assert.ok(seen.has("E06.d"), "Rescheduled route must be reachable");
+assert.equal(terminalGuidance(fresh()).length, 0, "No irrelevant terminal chores before the first dispatch");
+assert.match(terminalGuidance({...fresh(), event:"E02", memory:["M1"]})[0]?.detail ?? "", /사고 기록|장애/);
+const flightGranted = step(step({...fresh(),event:"E02",memory:["M1"]}, "term:search D-204"), "term:auth request flight");
+assert.match(terminalGuidance(flightGranted)[0]?.detail ?? "", /좌표|비행기록/);
+assert.match(terminalGuidance({...fresh(), event:"E05"})[0]?.detail ?? "", /사진 원본|51동/);
+assert.equal(terminalGuidance({...fresh(), event:"E04"}).length, 0);
+const flightTask = terminalGuidance({...fresh(), event:"E02", memory:["M1"]})[0];
+assert.match(flightTask.title, /조회|권한/);
+const flightLookup = step({...fresh(),event:"E02",memory:["M1"]}, "term:search D204");
+assert.ok(flightLookup.flags.includes("lookedUpD204"), "Hyphen-insensitive search must record investigated target");
+assert.match(terminalGuidance(flightLookup)[0]?.title ?? "", /권한/);
+const flightAuthorized = step(flightLookup, "term:auth request flight");
+assert.match(terminalGuidance(flightAuthorized)[0]?.title ?? "", /로그/);
+const flightLogged = step(flightAuthorized, "term:logs D204");
+assert.ok(flightLogged.flags.includes("terminalTrace"));
+assert.match(terminalGuidance(flightLogged)[0]?.title ?? "", /완료/);
+assert.ok(options(flightLogged).some(a => a.id === "E02.t"), "Verified flight trace must enable a new dispatch decision");
+assert.match(step(fresh(), "term:logs").terminal.at(-1).text, /대상이 빠졌습니다/);
+assert.match(step(fresh(), "term:search R-771").terminal.at(-1).text, /접수하지/);
+assert.match(step(fresh(), "term:search xyz").terminal.at(-1).text, /검색 대상/);
+assert.doesNotMatch(`${flightTask.title} ${flightTask.detail}`, /auth request|logs D-204|search D-204/i, "Guidance must describe intent without pasting commands");
+assert.equal(terminalGuidance({...fresh(), event:"E03", flags:["north"]}).length, 0, "Do not send the player to terminal for a desk-only action");
+assert.match(terminalGuidance({...fresh(), event:"E05", flags:["photoAuth"]})[0]?.detail ?? "", /증거로 남기|보존/);
+assert.match(terminalGuidance({...fresh(), event:"E01", memory:["M4","M5"]})[0]?.title ?? "", /권한/);
+assert.match(terminalGuidance({...fresh(), event:"E14", memory:["M4"], flags:["witness"]})[0]?.title ?? "", /권한/);
+assert.match(events.E02.body, /수신원이 없는 신호/);
+assert.match(events.E10.body, /겹쳐/);
+
+const privateStaff = step(fresh(), "term:staff lookup MP-H07");
+assert.match(privateStaff.terminal.at(-1).text, /AUTH 403/);
+assert.doesNotMatch(privateStaff.terminal.at(-1).text, /인간형 자율판단 로봇/);
+const whoami = step(fresh(), "term:whoami");
+assert.match(whoami.terminal.at(-1).text, /AUTH 403/);
+const privateHelp = step(fresh(), "term:help");
+assert.doesNotMatch(privateHelp.terminal.at(-1).text, /hint|가상 명령|실제 컴퓨터/);
+assert.match(privateHelp.terminal.at(-1).text, /cls/);
+assert.doesNotMatch(privateHelp.terminal.at(-1).text, /D-204|C-918|R-771|MP-S17|request flight|request audit/, "help must not reveal unreached IDs or solved commands");
+const syntaxHelp = step(fresh(), "term:help search");
+assert.match(syntaxHelp.terminal.at(-1).text, /search <장비 ID/);
+const authEarly = step(fresh(), "term:auth");
+assert.doesNotMatch(authEarly.terminal.at(-1).text, /서울시|보안감사|MP-S17/);
+const archiveEarly = step(fresh(), "term:archive index");
+assert.doesNotMatch(archiveEarly.terminal.at(-1).text, /R771|D204|RELAY/);
+const terminalCleared = step(privateHelp, "term:cls");
+assert.deepEqual(terminalCleared.terminal, []);
+assert.deepEqual(replay({ ...empty(), commands: ["term:help", "term:cls"] }).terminal, []);
+const noHint = step(fresh(), "term:hint");
+assert.match(noHint.terminal.at(-1).text, /명령을 찾을 수 없습니다/);
+let talks = step(fresh(), "E01.a");
+talks = step(talks, "E02.a");
+talks = step(talks, "E03.a");
+talks = step(talks, "eve:상점 일정 다시 잡을 수 있어?");
+assert.ok(talks.flags.includes("eveCoord"));
+assert.ok(options(talks).some(a => a.id === "E04.d"));
+talks = step(talks, "E04.d");
+talks = step(talks, "E05.b");
+assert.ok(options(talks).some(a => a.id === "E06.d"));
+talks = step(talks, "E06.d");
+assert.ok(talks.memory.includes("M2"));
+assert.ok(talks.eveChat.some(l => l.role === "operator"));
+const afterClearReplay = replay({...empty(), commands: ["E01.a","E02.a","E03.a","eve:상점 일정 다시 잡을 수 있어?","E04.d","E05.b","E06.d"]});
+assert.deepEqual(afterClearReplay, talks);
+const secretR = step(talks,"term:archive open R771 51-15");
+assert.ok(secretR.secrets.includes("R771"));
+assert.deepEqual(step(step(secretR,"E11.a"),"@").secrets,secretR.secrets);
 assert.ok(profiles.some((p) => p.length === Object.keys(memories).length));
 const route = (s, ids) => ids.split(" ").reduce(step, s);
 const auto = "E01.a E02.a E03.b E04.a E05.b E06.a E07.a E08.a";
@@ -76,13 +157,28 @@ assert.equal(fail.event, "F1");
 const next = step(fail, "@");
 assert.deepEqual([next.P, next.A, ...next.flags], [0, 0]);
 assert.deepEqual(next.memory, fail.memory);
+assert.deepEqual(fail.terminal, [], "Terminal output clears when the shift ends");
+assert.deepEqual(next.terminal, [], "Terminal output stays blank after restart");
+const withTerminal = route(fresh(), "E01.a E02.a E03.b E04.a E05.b E06.a E07.a");
+const withOutput = step(withTerminal, "term:status");
+assert.ok(withOutput.terminal.length > 0);
+const endedTerminal = step(withOutput, "E08.a");
+assert.deepEqual(endedTerminal.terminal, [], "End screen must not show the prior terminal session");
+const restarted = step(endedTerminal, "@");
+assert.deepEqual(restarted.terminal, []);
+assert.deepEqual(restarted.memory, endedTerminal.memory);
+const replayedRestart = replay({...empty(), commands:[..."E01.a E02.a E03.b E04.a E05.b E06.a E07.a".split(" "),"term:status","E08.a","@"]});
+assert.deepEqual(replayedRestart.terminal, []);
+assert.deepEqual(replayedRestart.memory, restarted.memory);
 assert.throws(() => route(fresh(), "E01.b"));
 assert.throws(() => step(fail, "E08.a"));
 assert.throws(
   () => decode('{"version":1,"rev":"x","commands":["E01.a"]}'),
   /HUMAN FIRST/,
 );
-assert.throws(() => decode('{"version":2,"rev":"x","commands":["E12.d"]}'));
+assert.throws(() => decode('{"version":2,"rev":"x","commands":["E12.d"]}'), /이전 MEGAPOST/);
+assert.throws(() => decode('{"version":3,"rev":"x","commands":["E12.d"]}'), /이전 개편판/);
+assert.throws(() => decode('{"version":4,"rev":"x","commands":["E12.d"]}'));
 assert.throws(() => decode('{"version":2}'));
 assert.deepEqual(replay({ ...empty(), commands: auto.split(" ") }), fail);
 assert.deepEqual(route(next, auto).memory, fail.memory);
@@ -102,6 +198,43 @@ const guided = path.map((p, i) => {
   return informed.event;
 });
 assert.deepEqual(guided, ["F1", "F3", "K3", "F4", "K4"]);
+let hidden = step(informed, "@");
+hidden = route(hidden, "E01.b E13.a E02.d E10.a E03.c E04.b E05.b E06.b E11.c E12.d");
+assert.equal(hidden.event, "E14");
+assert.equal(options(hidden).some((a) => a.id === "E14.c"), false);
+hidden = step(hidden, "term:auth request audit");
+hidden = step(hidden, "term:inspect MP-S17");
+assert.ok(options(hidden).some((a) => a.id === "E14.c"));
+hidden = route(hidden, "E14.c E15.b E16.b");
+assert.equal(hidden.event, "K5");
+assert.ok(hidden.memory.includes("M6"));
+assert.deepEqual(hidden.terminal, [], "Terminal output must clear at the ending");
+const restored = replay({ ...empty(), commands: [
+  ..."E01.a E02.a E03.b E04.a E05.b E06.a E07.a E08.a".split(" "), "@",
+  "E01.a", "term:auth request flight", "term:logs D-204", "E02.t",
+] });
+assert.ok(restored.flags.includes("trace"));
+assert.equal(restored.terminal.some((m) => m.command === "logs D-204"), true);
+assert.equal(restored.event, "E03");
+assert.equal(step(fresh(), "term:auth request audit").flags.includes("auditAuth"), false);
+const corporate = route(
+  { ...fresh(), memory: ["M1", "M2", "M3", "M4", "M5"] },
+  "E01.b E13.a E02.d E10.a E03.a E04.b E05.b E06.b E11.c E12.d E14.a",
+);
+assert.equal(corporate.event, "K4");
+assert.equal(corporate.memory.includes("M6"), false);
+const secretRelay = step(corporate, "term:archive open RELAY 07-58");
+assert.ok(secretRelay.secrets.includes("RELAY"));
+assert.equal(step(fresh(), "term:archive open RELAY 07-58").secrets.length, 0);
+let secretFlight = route({...fresh(),memory:["M1"]}, "E01.a E02.d E10.a");
+secretFlight = step(secretFlight, "term:archive open D204 08-12");
+assert.ok(secretFlight.secrets.includes("D204"));
+assert.equal(step(fresh(), "term:archive open D204 08-12").secrets.length, 0);
+const leaked = step(secretFlight, "term:staff lookup 한윤서");
+assert.match(leaked.terminal.at(-1).text, /AUTH 403/);
+
+// Identifying as a robot must never be visible as an available choice in the first run.
+assert.equal(options(fresh()).some((a) => a.id.startsWith("E15")), false);
 let seed = 18400;
 function uniform(n) {
   seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0;

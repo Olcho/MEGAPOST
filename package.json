@@ -1,13 +1,13 @@
 {
   "name": "megapost-dispatch",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "private": true,
   "type": "module",
   "scripts": {
     "dev": "vite",
     "build": "tsc --noEmit && vite build",
     "preview": "vite preview",
-    "test": "node docs/qa/check-design.mjs"
+    "test": "node --experimental-strip-types docs/qa/check-design.mjs"
   },
   "dependencies": {
     "react": "^19.1.0",
