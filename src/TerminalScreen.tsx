@@ -12,7 +12,7 @@ function lastResult(state: State): { title: string; next: string; useful: boolea
     return { title: "비행기록 열람 가능", next: "이제 드론의 비행 로그를 열어 경로를 비교하세요.", useful: true };
   if (cmd === "logsd204" && state.flags.includes("terminalTrace"))
     return { title: "안전한 우회 경로 발견", next: "배송관제로 돌아가 새로 열린 강변 경로 선택지를 확인하세요.", useful: true };
-  if (cmd === "authrequestphoto" && state.flags.includes("photoAuth"))
+  if (/^authrequest(?:photo|photos|image|images|사진|사진원본|이미지|이미지원본)$/.test(cmd) && state.flags.includes("photoAuth"))
     return { title: "사진 원본 접근 가능", next: "배송관제에서 원본 사진을 보존할 수 있는 새 행동을 확인하세요.", useful: true };
   if (cmd === "authrequestcity" && state.flags.includes("cityAuth"))
     return { title: "시 안전망 권한 획득", next: "이제 해당 화물의 예비 회선을 예약할 수 있습니다.", useful: true };
@@ -37,20 +37,32 @@ export function TerminalScreen({ state, busy, send, returnToDesk }: {
   const [historyIndex, setHistoryIndex] = useState(-1);
   const end = useRef<HTMLDivElement>(null);
   const field = useRef<HTMLInputElement>(null);
+  const submitting = useRef(false);
   const suggested = terminalGuidance(state);
   const steps = investigationSteps(state);
   const result = lastResult(state);
   const latest = state.terminal.at(-1);
   const history = useMemo(() => state.terminal.filter(line => line.command).map(line => line.command!).reverse(), [state.terminal]);
   useEffect(() => { end.current?.scrollIntoView({ block: "nearest", behavior: "instant" }); }, [state.terminal.length]);
-  useEffect(() => { field.current?.focus(); }, []);
+  useEffect(() => { field.current?.focus({ preventScroll: true }); }, []);
   useEffect(() => { setHistoryIndex(-1); setInput(""); }, [state.shift]);
   async function submit() {
     const value = input.trim();
-    if (!value || busy) return;
-    const succeeded = await send(value);
-    if (succeeded) { setInput(""); setHistoryIndex(-1); }
-    field.current?.focus();
+    if (!value || busy || submitting.current) return;
+    submitting.current = true;
+    // Keep the input focusable while the asynchronous save runs. Clear the old
+    // command immediately, allowing the next command to be typed during a save.
+    setInput("");
+    setHistoryIndex(-1);
+    field.current?.focus({ preventScroll: true });
+    try {
+      const succeeded = await send(value);
+      if (!succeeded) setInput(draft => draft || value);
+    } finally {
+      submitting.current = false;
+      // The field never becomes disabled; focus also returns after mouse submits.
+      field.current?.focus({ preventScroll: true });
+    }
   }
   return (
     <section className="terminal-panel" aria-label="배송 관제 터미널">
@@ -113,8 +125,8 @@ export function TerminalScreen({ state, busy, send, returnToDesk }: {
                 e.preventDefault(); const next = historyIndex - 1; setHistoryIndex(next); setInput(next < 0 ? "" : history[next]);
               }
             }}
-            placeholder="명령 입력 · 기본 문법 help" maxLength={100} autoComplete="off" autoCapitalize="off" spellCheck={false} disabled={busy} />
-          <button type="submit" disabled={busy || !input.trim()}>실행</button>
+            placeholder="명령 입력 · 기본 문법 help" maxLength={100} autoComplete="off" autoCapitalize="off" spellCheck={false} />
+          <button type="submit" onMouseDown={(e) => e.preventDefault()} disabled={busy || !input.trim()}>실행</button>
         </div>
       </form>
       <div className="terminal-footer">

@@ -24,7 +24,7 @@ export function terminalGuidance(s: State): Investigation[] {
   if (event === "E05") {
     return has(s, "photoAuth")
       ? task("인수 사진 원본을 확인하세요", "열람 권한을 얻었습니다. 배송관제로 돌아가 원본 사진을 증거로 남기는 행동을 선택할 수 있습니다.")
-      : task("오배송 사진의 열람 권한을 확인하세요", "주문 주소는 15동, 사진 속 표찰은 51동입니다. 배송 로봇의 사진 원본에 접근할 권한을 확보해 보세요.");
+      : task("오배송 사진의 열람 권한을 확인하세요", "주문 주소는 15동, 사진 속 표찰은 51동입니다. 필요한 권한은 인수 사진 원본(photo)입니다. 현재 접근 권한 목록을 확인하고 이 권한을 신청하세요.");
   }
   if (["E06", "E11"].includes(event) && knows(s, "M2")) {
     return has(s, "checkedC918")
@@ -79,7 +79,7 @@ export function operatingNote(s: State): string {
     case "E06": case "E11": return "전산 기록에는 배송 완료, 현장에는 화물이 남아 있습니다.";
     case "E12": case "E14": return "화물을 보호하면서 중복 지시의 발신자를 확인해야 합니다.";
     default: return /^[FK]\d+$/.test(s.event)
-      ? "이번 근무는 끝났습니다. 다음 교대에서 종료 분석에 남은 단서를 활용하세요."
+      ? "이번 근무의 관제가 종료되었습니다."
       : "현재 사건의 선택지는 배송관제에서 확인할 수 있습니다.";
   }
 }

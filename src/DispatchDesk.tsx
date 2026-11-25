@@ -99,20 +99,21 @@ export function DispatchDesk({
     E16: ["관제망: 외부로 인계", "자율적인 기록 제출: 가능"],
   };
   const available = options(state);
-  const baseChoices = available.filter((a) =>
-    !/\b(?:M[1-9]|W|terminalTrace|identityLead)\b/.test(a.cond),
-  );
-  const unlockedChoices = available.filter((a) =>
-    /\b(?:M[1-9]|W|terminalTrace|identityLead)\b/.test(a.cond),
-  );
+  const terminalUnlock = (a: (typeof actions)[number]) =>
+    /\b(?:terminalTrace|photoAuth|identityLead)\b/.test(a.cond);
+  const memoryUnlock = (a: (typeof actions)[number]) => /\b(?:M[1-9]|W)\b/.test(a.cond);
+  const baseChoices = available.filter(a => !terminalUnlock(a) && !memoryUnlock(a));
+  const unlockedChoices = available.filter(a => !terminalUnlock(a) && memoryUnlock(a));
+  const terminalChoices = available.filter(terminalUnlock);
   const choiceButton = (action: (typeof actions)[number]) => (
     <button
       key={action.id}
       data-action={action.id}
       disabled={busy}
       onClick={() => advance(action.id)}
-      className={welcome && action.id === "E01.a" ? "primary" : "choice"}
+      className={welcome && action.id === "E01.a" ? "primary" : terminalUnlock(action) ? "choice terminal-unlocked-choice" : "choice"}
     >
+      {terminalUnlock(action) && <span className="terminal-unlock-tag">조사 결과 / 신규 대응</span>}
       <strong>{action.label}</strong>
       <span className="hint">{action.hint}</span>
     </button>
@@ -122,6 +123,12 @@ export function DispatchDesk({
       <div className="choices" aria-label="선택 가능한 행동">
         {baseChoices.map(choiceButton)}
       </div>
+      {terminalChoices.length > 0 && (
+        <div className="terminal-unlocked-section" aria-label="터미널 조사로 확보한 대응">
+          <p className="terminal-unlocked-title">터미널 조사로 확보한 대응</p>
+          <div className="choices">{terminalChoices.map(choiceButton)}</div>
+        </div>
+      )}
       {unlockedChoices.length > 0 && (
         <div className="unlocked-section">
           <p className="unlocked-title">이전 근무에서 알아낸 방법</p>
@@ -197,11 +204,6 @@ export function DispatchDesk({
                   <span className="debrief-label">이번 근무 분석</span>
                   <h2>{debrief(state)!.title}</h2>
                   <p><b>결정적 원인</b>{debrief(state)!.trigger}</p>
-                  <p><b>다음 근무의 실마리</b>{debrief(state)!.next}</p>
-                  <div className="debrief-command">
-                    <span>다음 교대에서 관련 기록을 직접 확인할 수 있습니다.</span>
-                    <button type="button" onClick={() => openTerminal()}>터미널 보기</button>
-                  </div>
                 </section>
               )}
               <Discoveries state={state} />

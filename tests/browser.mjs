@@ -49,7 +49,34 @@ try {
   await page.getByRole("button", { name: "터미널", exact: true }).click();
   await page.locator("#terminal-command").fill("status");
   await page.getByRole("button", { name: "실행", exact: true }).click();
-  assert.equal(await page.locator(".terminal-command").count(), 1);
+  await page.waitForFunction(() => document.querySelectorAll(".terminal-command").length === 1);
+  // No extra mouse click or Tab is needed after a command, including an error.
+  const focused = async () => page.waitForFunction(() => {
+    const field = document.querySelector("#terminal-command");
+    return field === document.activeElement && field.value === "" && !field.disabled;
+  });
+  await focused();
+  await page.keyboard.type("help status");
+  await page.keyboard.press("Enter");
+  await page.getByText("status (추가 인수 없음)", {exact:false}).waitFor();
+  await focused();
+  await page.keyboard.type("nonsense");
+  await page.keyboard.press("Enter");
+  await page.getByText("명령을 인식하지 못했습니다.", {exact:false}).waitFor();
+  await focused();
+  await page.keyboard.type("help help");
+  await page.keyboard.press("Enter");
+  await page.getByText("도움말의 도움말까지요?", {exact:false}).waitFor();
+  await focused();
+  await page.keyboard.type("help cls");
+  await page.keyboard.press("Enter");
+  await page.getByText("화면을 지우는 데도 매뉴얼이 필요하셨나요?", {exact:false}).waitFor();
+  await focused();
+  await page.keyboard.type("cls");
+  await page.keyboard.press("Enter");
+  await page.waitForFunction(() => document.querySelectorAll(".terminal-line").length === 0);
+  await focused();
+
   await page.getByRole("button", { name: /배송관제로 돌아가기/ }).click();
   await route("E02.a E03.b E04.a E05.b E06.a E07.a E08.a");
   await outcome("관제석 자동 전환");
@@ -207,10 +234,16 @@ try {
   await interactive.getByRole("button",{name:"실행",exact:true}).click();
   await interactive.getByRole("button",{name:"배송 관제",exact:true}).click();
   await interactive.locator('[data-action="E05.d"]').waitFor();
+  assert.equal(await interactive.locator('.terminal-unlocked-section [data-action="E05.d"]').count(), 1);
+  assert.equal(await interactive.locator('[data-action="E05.d"] .terminal-unlock-tag').count(), 1);
   await interactive.locator('[data-action="E05.d"]').click();
+  await interactive.getByText("[R-771 원본 복사]",{exact:false}).waitFor();
   await interactive.locator('[data-action="E06.d"]').waitFor();
   await interactive.locator('[data-action="E06.d"]').click();
   await interactive.getByRole("button",{name:"터미널",exact:true}).click();
+  await interactive.locator("#terminal-command").fill("help");
+  await interactive.getByRole("button",{name:"실행",exact:true}).click();
+  await interactive.getByText("접수된 감사 자료 보관함",{exact:false}).waitFor();
   await interactive.locator("#terminal-command").fill("archive open R771 51-15");
   await interactive.getByRole("button",{name:"실행",exact:true}).click();
   await interactive.getByText("서로 다른 근무일",{exact:false}).waitFor();
@@ -219,6 +252,12 @@ try {
   await interactive.reload();
   await openLibrary(interactive, "기록 보관함");
   await interactive.getByText("회수되지 않은 프레임",{exact:false}).waitFor();
+  await interactive.getByRole("button",{name:"배송 관제",exact:true}).click();
+  await interactive.locator('[data-action="E11.a"]').click();
+  await interactive.getByRole("button",{name:"이번 근무는 어땠어?",exact:true}).waitFor();
+  assert.equal(await interactive.getByRole("button",{name:"터미널에서 뭘 확인하지?",exact:true}).count(),0);
+  await interactive.getByRole("button",{name:"내가 뭘 잘못한 거지?",exact:true}).click();
+  await interactive.getByText("같은 봉인 번호의 중복 출고를 승인했습니다.",{exact:false}).waitFor();
   await interactiveContext.close();
   console.log(
     "Desktop/mobile browser routes passed (v7 navigation, terminal help discovery, EVE): terminal auth/logs, F1 → F3 → K3 → F4 → K4 → K5, K1 → K2, archive, export/reset/import and preserved v1 save.",

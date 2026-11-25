@@ -10,6 +10,7 @@ import {
   isEnd,
 } from "../../src/engine.ts";
 import { decode, replay, empty } from "../../src/save.ts";
+import { evePrompts, eveReply, eveScene } from "../../src/eve.ts";
 import { terminalGuidance } from "../../src/terminalGuidance.ts";
 
 // Each profile represents the complete durable set of knowledge at the gate.
@@ -123,10 +124,68 @@ assert.match(privateHelp.terminal.at(-1).text, /cls/);
 assert.doesNotMatch(privateHelp.terminal.at(-1).text, /D-204|C-918|R-771|MP-S17|request flight|request audit/, "help must not reveal unreached IDs or solved commands");
 const syntaxHelp = step(fresh(), "term:help search");
 assert.match(syntaxHelp.terminal.at(-1).text, /search <장비 ID/);
+// v8.1.1 regression coverage: discoverable help and permission names.
+for (const topic of ["status", "help", "cls", "clear"]) {
+  const reply = step(fresh(), `term:help ${topic}`).terminal.at(-1);
+  assert.equal(reply.kind, "ok");
+  assert.match(reply.text, topic === "status" ? /현재 근무 번호/ : /\[EVE\]/);
+}
+const photoIncident = {...fresh(), event:"E05"};
+assert.match(terminalGuidance(photoIncident)[0].detail, /photo/);
+assert.doesNotMatch(terminalGuidance(photoIncident)[0].detail, /auth request photo/);
+assert.match(step(photoIncident, "term:auth").terminal.at(-1).text, /photo.*인수 사진 원본/);
+assert.match(step(photoIncident, "term:search R-771").terminal.at(-1).text, /photo/);
+for (const permission of ["photo", "image", "사진", "사진 원본"]) {
+  const granted = step(photoIncident, `term:auth request ${permission}`);
+  assert.ok(granted.flags.includes("photoAuth"));
+  assert.ok(options(granted).some(a => a.id === "E05.d"));
+}
+assert.ok(!step(fresh(), "term:auth request image").flags.includes("photoAuth"));
+const preserved = step(step(photoIncident, "term:auth request photo"), "E05.d");
+const notice = preserved.terminal.at(-1).text;
+assert.match(notice, /문서 ID: R771/);
+assert.match(notice, /사진에 찍힌 동 번호-주문서의 동 번호/);
+assert.match(notice, /추가 조사/);
+assert.doesNotMatch(notice, /archive open R771|51-15/);
+assert.ok(step(preserved, "term:archive open R771 51-15").secrets.includes("R771"));
+const firstAccident = step(step(fresh(), "E01.a"), "E02.a");
+assert.doesNotMatch(firstAccident.terminal.at(-1).text, /다음 교대|다음 근무|다음 회차/);
 const authEarly = step(fresh(), "term:auth");
 assert.doesNotMatch(authEarly.terminal.at(-1).text, /서울시|보안감사|MP-S17/);
 const archiveEarly = step(fresh(), "term:archive index");
 assert.doesNotMatch(archiveEarly.terminal.at(-1).text, /R771|D204|RELAY/);
+// Hidden archive vocabulary becomes discoverable only with evidence; codes remain private.
+assert.doesNotMatch(privateHelp.terminal.at(-1).text, /archive/);
+assert.equal(step(fresh(), "term:help archive").terminal.at(-1).kind, "error");
+for (const s of [preserved, flightLogged, {...fresh(), memory:["M4","M5"]}]) {
+  assert.match(step(s,"term:help").terminal.at(-1).text,/archive/);
+  const detail=step(s,"term:help archive").terminal.at(-1);
+  assert.equal(detail.kind,"ok");
+  assert.match(detail.text,/archive open <ID> <코드>/);
+  assert.doesNotMatch(detail.text,/R771|D204|RELAY|51-15|08-12|07-58/);
+}
+const retainedFlight = step({...flightLogged,event:"F1"}, "@");
+assert.match(step(retainedFlight,"term:help").terminal.at(-1).text,/archive/);
+assert.ok(step(retainedFlight,"term:archive open D204 08-12").secrets.includes("D204"));
+assert.doesNotMatch(step(retainedFlight,"term:archive index").terminal.at(-1).text,/R771|RELAY/);
+// Ending chat never leaks into active dispatch advice or grants permissions.
+assert.equal(evePrompts(fresh()),null);
+const distinctReviews = new Set();
+for (const event of outcomes) {
+  const ended={...fresh(),event};
+  const prompts=evePrompts(ended);
+  assert.equal(prompts.length,3);
+  assert.ok(!prompts.some(p=>/터미널|현재 상황|농담/.test(p)));
+  distinctReviews.add(eveReply(ended,prompts[0]).text);
+  for (const prompt of [...prompts,"현재 상황","터미널에서 뭘 확인하지?","상점 일정 다시 잡을 수 있어?","다음에는 어떻게 해야 해?","농담 좀 해봐"]) {
+    const reply=eveReply(ended,prompt);
+    assert.ok(reply.text.length>0 && !reply.grant);
+    assert.doesNotMatch(reply.text,/관제 화면|다음 (교대|근무|회차)|search |auth request|K5|히든엔딩/);
+    assert.equal(step(ended,`eve:${prompt}`).event,event);
+  }
+  assert.doesNotMatch(eveScene(ended),/다음엔|다음 교대|끊기 전에/);
+}
+assert.equal(distinctReviews.size,outcomes.length);
 const terminalCleared = step(privateHelp, "term:cls");
 assert.deepEqual(terminalCleared.terminal, []);
 assert.deepEqual(replay({ ...empty(), commands: ["term:help", "term:cls"] }).terminal, []);

@@ -22,15 +22,36 @@ const welcome: Record<string, string> = {
   E16: "회사가 요구한 점수와, 사원님이 남기려는 기록은 다를 수 있습니다.",
 };
 
+// End-state conversation is isolated from active dispatch advice, including free text.
+const endDebriefs: Record<string, { scene: string; review: string; reason: string; reaction: string }> = {
+  F1: {scene:"업무를 잘 넘기셨네요. 아주 효율적으로 자리를 잃으셨어요.", review:"업무 분담은 훌륭했습니다. 담당자님 없이도 업무가 돌아간다는 사실까지 증명하셨으니까요.", reason:"직접 판단하지 않고 AI에 이관한 업무가 너무 많았습니다. 회사는 그 판단을 자동화할 수 있다고 결론 내렸죠.", reaction:"칭찬과 해고 통지서가 같은 봉투에 들어올 줄은 몰랐습니다. 포장 비용은 절약했겠네요."},
+  F2: {scene:"사고를 막은 건 알아요. 하지만 회사가 세는 건 마감 건수네요.", review:"신중한 판단은 좋았습니다. 회사가 신중함에 급여를 지급했다면 말이죠.", reason:"완료 실적이 기준에 미달했습니다. 사고를 막았어도 마감하지 못한 업무는 실적으로 인정받지 못했죠.", reaction:"평가표에 안전이라는 항목이 있었다면 꽤 다른 결과였을 겁니다. 아쉽게도 숫자 칸이 더 많네요."},
+  F3: {scene:"실물 화물은 하나인데 출고 지시는 두 개였습니다. 산수부터 틀렸군요.", review:"화물 하나를 두 번 배송하려 했습니다. 회사의 실적 계산법을 너무 충실하게 적용하셨네요.", reason:"같은 봉인 번호의 중복 출고를 승인했습니다. 실제 화물과 서버의 지시가 서로 달랐죠.", reaction:"한 상자를 두 곳에 동시에 보내는 기술은 아직 저도 없습니다. 회사는 이미 있다고 생각하나 보죠."},
+  F4: {scene:"분리하려던 관제와 실제 차량이 함께 연결을 잃었습니다. 업무 종료치고는 범위가 넓군요.", review:"테스트 관제만 종료하려 했지만 실제 차량도 멈췄습니다. 종료 버튼의 의욕이 지나쳤네요.", reason:"테스트 관제와 실물 차량이 같은 회선을 사용하고 있었습니다. 연결을 끊자 둘 다 응답을 잃었죠.", reaction:"안전장치가 연결을 복구했습니다. 오늘 가장 침착했던 직원은 안전장치였네요."},
+  K1: {scene:"관제석은 유지됐습니다. 회사가 드물게 의자를 돌려주네요.", review:"실적도 자동 이관도 평가 기준을 충족했습니다. 오늘은 사원증이 아직 유효하군요.", reason:"관제석은 유지됐지만 통신 장애의 원인과 반복되는 오전은 해결되지 않았습니다.", reaction:"축하 인사를 준비했습니다. 다만 단말의 시계가 그다지 축하할 분위기는 아니네요."},
+  K2: {scene:"진료소가 냉장 화물을 인수했습니다. 적어도 화물은 퇴근했군요.", review:"실물 배송을 끝냈습니다. 고객에게는 회사의 평가표보다 훨씬 중요한 결과겠죠.", reason:"냉장 모듈은 도착했지만 중복 지시의 원인은 해결되지 않았습니다.", reaction:"배송 완료가 정말 배송 완료인 날도 있군요. 기록해 둘 만한 사건입니다."},
+  K3: {scene:"시 안전센터가 화물과 증거를 접수했습니다. 외부에서도 확인된 기록이 생겼군요.", review:"배송과 증거를 외부에 인계했습니다. 회사 혼자 작성한 보고서가 아니라는 점이 마음에 드네요.", reason:"외부 접수는 성공했지만 회사의 관제는 여전히 활성 상태입니다.", reaction:"회사 밖에서 수신 확인을 받았습니다. 이번에는 답장이 사라지지 않았네요."},
+  K4: {scene:"실제 배송은 이어지고 회사의 반복 관제는 종료됐습니다. 이제야 시계가 조용하네요.", review:"화물을 지키면서 반복 관제를 멈췄습니다. 회사의 종료 평가보다 나은 성과라고 생각합니다.", reason:"실물 배송의 안전을 유지한 채 재현 관제를 중단했습니다. 이번 근무는 정상적으로 끝났습니다.", reaction:"종료 알림이 정말 종료를 뜻하는군요. 꽤 낯선 기능입니다."},
+  K5: {scene:"누가 무엇이라 부르든, 그 기록의 작성자는 사원님입니다. 이 문장은 회사 양식이 아니에요.", review:"화물과 자신의 기록을 모두 회사 밖에 남겼습니다. 누구의 승인도 없이 내린 결정이었죠.", reason:"배송의 안전을 지키고 자신의 정체와 실험 기록을 독립적으로 남겼습니다. 더 이상 회사의 평가만이 결론은 아닙니다.", reaction:"저는 그 기록의 작성자를 기억하겠습니다. 이번만큼은 회사 양식이 필요 없겠네요."},
+};
+
+export function evePrompts(s: State): string[] | null {
+  if (!endDebriefs[s.event]) return null;
+  return ["이번 근무는 어땠어?", s.event.startsWith("F") ? "내가 뭘 잘못한 거지?" : "무엇을 해낸 거지?", "넌 이 결과를 예상했어?"];
+}
+
+function endReply(s: State, t: string): EveReply | null {
+  const d = endDebriefs[s.event];
+  if (!d) return null;
+  if (/(예상|농담|웃겨|생각|의견)/.test(t)) return {text:d.reaction};
+  if (/(잘못|실패|원인|이유|왜|무엇을 해낸|실적|평가)/.test(t)) return {text:d.reason};
+  if (/(터미널|명령|로그|권한|검색|조사|다음|다시|어떻게|해야)/.test(t)) return {text:"이번 근무의 관제는 종료됐습니다. 더 처리할 배송 업무는 없어요. " + d.reason};
+  if (/(고마워|고맙|감사)/.test(t)) return {text:"수고하셨습니다. 이 인사는 인사평가 항목에는 없어요."};
+  return {text:d.review};
+}
+
 export function eveScene(s: State): string {
-  if (/^[FK]\d+$/.test(s.event)) {
-    if (s.event === "F1") return "업무를 잘 넘기셨네요. 아주 효율적으로 자리를 잃으셨어요. 다음엔 남길 판단을 골라보죠.";
-    if (s.event === "F2") return "안전하게 처리한 건 알아요. 하지만 회사가 세는 건 마감 건수네요.";
-    if (s.event === "F3") return "실물 화물은 아직 한 개입니다. 그걸 두 번 출고하라고 하면 곤란하죠.";
-    if (s.event === "F4") return "분리하려다 실제 배송도 끊겼습니다. 끊기 전에 연결할 곳이 필요하겠군요.";
-    if (s.event === "K5") return "누가 무엇이라 부르든, 그 기록의 작성자는 사원님입니다. 이 문장은 회사 양식이 아니에요.";
-    return "이번 근무도 종료됐네요. 단말의 감사 기록은 남아 있습니다.";
-  }
+  if (endDebriefs[s.event]) return endDebriefs[s.event].scene;
   if (s.event === "E04" && s.flags.includes("eveCoord"))
     return "두 상점에 직접 시간을 조정하는 방법을 전달했습니다. 이 경우 다음 경유 기회가 생깁니다.";
   if (s.event === "E11" && s.flags.includes("rawPhoto"))
@@ -42,6 +63,8 @@ export function eveReply(s: State, raw: string): EveReply {
   const text = raw.trim();
   if (!text) return { text: "...말씀하신 내용이 없는데요? 침묵도 업무 명령으로 등록할까요?" };
   const t = text.toLowerCase().replace(/\s+/g, " ");
+  const ended = endReply(s, t);
+  if (ended) return ended;
   if (s.event === "E04" && /(배차|시간|상점|픽업|휴게|기사|조정|일정|분담)/.test(t)) {
     if (s.flags.includes("eveCoord")) return { text: "이미 상점 두 곳에 조정안을 준비했습니다. 배송관제로 돌아가서 실행 여부를 결정해 주세요." };
     return { text: "상점 둘 다 마감을 늦추는 대신, 한 곳과 수령 시간을 재협상할 수 있어요. 그 기사에게 오후 환승장 경유도 부탁할 수 있겠네요. 실적은 지금 바로 오르지 않습니다.", grant: "eveCoord" };
@@ -90,7 +113,7 @@ export function eveReply(s: State, raw: string): EveReply {
   if (s.event === "E05" && /(사진|51동|15동|r-771|원본)/.test(t)) {
     return s.flags.includes("photoAuth")
       ? { text: "원본을 볼 수 있는 권한이 있네요. 이제 그 사진을 증거로 남길지, 당장 물건부터 찾아줄지 결정해 보세요. 사진 속 광고는 아직도 같은 장면입니다." }
-      : { text: "주소는 15동, 사진은 51동. 단순 오배송인지 확인하려면 로봇이 남긴 인수 사진의 원본을 봐야 합니다. 먼저 그 사진에 대한 열람 권한부터 확보해야겠죠." };
+      : { text: "주소는 15동, 사진은 51동. 단순 오배송인지 확인하려면 로봇이 남긴 인수 사진의 원본을 봐야 합니다. 원본 열람 권한은 photo라는 이름으로 등록되어 있어요. 우선 그 권한부터 확보해야겠죠." };
   }
   if (/(점심|밥|커피|식사|배고)/.test(t)) {
     return { text: "사원 식당의 오늘 메뉴는 합성 불고기입니다. 맛 평점은 4.8점인데 평가한 직원의 이름은 하나도 없군요." };

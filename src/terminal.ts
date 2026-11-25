@@ -20,6 +20,14 @@ export const secretContents: Record<string, string> = {
   RELAY: "[교대 회선 보존 규칙 / 삭제된 안내문]\n업무 세션 종료 시 근무 화면은 복원합니다. 외부 안전 감사 자료는 삭제 대상에서 제외합니다.\n마지막 줄에는 '인사 명부와 장비 등록부를 동일한 기준으로 조회하지 말 것'이라고 쓰여 있습니다.",
 };
 
+// A single discovery rule drives the index, help and document access.
+export function archiveEntries(s: State) {
+  return secretFiles.filter(file => s.archiveKnown.includes(file.id) || s.secrets.includes(file.id) ||
+    (file.id === "R771" ? everDid(s, "E05.b") || everDid(s, "E05.d") :
+      file.id === "D204" ? everDid(s, "E10.a") || everDid(s, "E02.t") || has(s, "terminalTrace") :
+      knows(s, "M4") && knows(s, "M5")));
+}
+
 export function terminalCommand(s: State, raw: string): TerminalReply {
   // Normalize harmless formatting differences. Finding a subject is the puzzle, not typing its hyphen.
   let cmd = raw.trim().replace(/\s+/g, " ").toLowerCase();
@@ -29,6 +37,8 @@ export function terminalCommand(s: State, raw: string): TerminalReply {
     .replace(/\br\s*-?\s*771\b/g, "r-771")
     .replace(/\bc\s*-?\s*918\b/g, "c-918")
     .replace(/\bmp\s*-?\s*s\s*-?\s*17\b/g, "mp-s17");
+  // Accept common natural names for the same permission, without changing its flag.
+  if (/^auth request (image|images|photos|사진|사진 원본|이미지|이미지 원본)$/.test(cmd)) cmd = "auth request photo";
   const ok = (text: string, grant?: string): TerminalReply => ({ kind: "ok", text, grant });
   const error = (text: string): TerminalReply => ({ kind: "error", text });
   if (!cmd) return error("명령을 입력하세요. 사용법은 help를 입력하세요.");
@@ -46,25 +56,21 @@ export function terminalCommand(s: State, raw: string): TerminalReply {
     return error("AUTH 403 / 직원 명부 권한은 관제 단말에서 발급되지 않습니다.");
 
   if (cmd === "archive" || cmd === "archive index") {
-    const encountered = secretFiles.filter((file) => file.id === "R771"
-      ? everDid(s, "E05.b") || everDid(s, "E05.d") || s.secrets.includes(file.id)
-      : file.id === "D204"
-        ? everDid(s, "E10.a") || has(s, "terminalTrace") || s.secrets.includes(file.id)
-        : knows(s, "M4") && knows(s, "M5") || s.secrets.includes(file.id));
+    const encountered = archiveEntries(s);
     const entries = encountered.map((file) => `${file.id.padEnd(6)} | ${s.secrets.includes(file.id) ? "열람 완료" : "접근 코드 필요"}`);
     return ok(`보관 감사 색인\n${entries.join("\n") || "현재 접근 가능한 색인 없음"}\n문서가 접수되면 색인에 나타납니다. 원본 열람 시에는 ID와 접근 코드가 필요합니다.`);
   }
   if (cmd.startsWith("archive open ")) {
     const [, , id = "", code = ""] = cmd.split(" ");
     const doc = id.toUpperCase();
-    const access: Record<string, { code: string; valid: boolean; source: string }> = {
-      R771: { code: "51-15", valid: everDid(s, "E05.b") || everDid(s, "E05.d"), source: "로봇의 재배송 사진 또는 사진 원본" },
-      D204: { code: "08-12", valid: everDid(s, "E10.a") || has(s, "terminalTrace"), source: "전임자 블랙박스 또는 당일 비행기록" },
-      RELAY: { code: "07-58", valid: knows(s, "M5") && knows(s, "M4"), source: "실패한 회선 분리 작업" },
+    const access: Record<string, { code: string; source: string }> = {
+      R771: { code: "51-15", source: "로봇의 재배송 사진 또는 사진 원본" },
+      D204: { code: "08-12", source: "전임자 블랙박스 또는 당일 비행기록" },
+      RELAY: { code: "07-58", source: "실패한 회선 분리 작업" },
     };
     const record = access[doc];
     if (!record) return error("해당 ID의 보관 기록을 찾지 못했습니다. archive index");
-    if (!record.valid) return error(`ACCESS DENIED / 선행 사건 기록 필요: ${record.source}`);
+    if (!archiveEntries(s).some(file => file.id === doc)) return error(`ACCESS DENIED / 선행 사건 기록 필요: ${record.source}`);
     if (record.code !== code) return error("ACCESS DENIED / 접근 코드 불일치. 관련 사건의 수신 내역을 확인하세요.");
     return { kind: "ok", text: secretContents[doc], secret: doc };
   }
@@ -88,9 +94,17 @@ export function terminalCommand(s: State, raw: string): TerminalReply {
       if (knows(s, "M1") || has(s, "flightAuth")) available.push("  logs <기체 ID>     운항 기록 확인");
       if (knows(s, "M4")) available.push("  inspect <계정>     발신 기록 조사");
       if (knows(s, "M5")) available.push("  route <작업> <화물> 외부 회선 작업");
+      if (archiveEntries(s).length) available.push("  archive            접수된 감사 자료 보관함");
       available.push("  help <기능>        입력 형식 확인", "  cls                화면 정리");
       return ok(`MEGAPOST 관제 명령\n${available.join("\n")}\n대상 ID는 현재 사건과 수신 기록에서 확인하세요.`);
     }
+    case "help status":
+      return ok("status (추가 인수 없음)\n현재 근무 번호, 처리 실적, AI 이관 건수, 보존 기록 수와 접근 권한 상태를 표시합니다. 상태를 변경하지 않습니다.");
+    case "help help":
+      return ok("help / help <기능>\n명령 목록 또는 개별 기능의 사용법을 표시합니다.\n[EVE] 도움말의 도움말까지요? 신입 교육 자료를 아주 철저히 검수하고 계시는군요.");
+    case "help cls":
+    case "help clear":
+      return ok("cls (추가 인수 없음)\n터미널 화면의 출력만 지웁니다. 권한과 보존 기록은 그대로 유지됩니다.\n[EVE] 화면을 지우는 데도 매뉴얼이 필요하셨나요? 안심하세요. 업무 실적까지 지워지지는 않습니다.");
     case "help search":
       return ok("search <장비 ID 또는 확인한 발신 ID>\n예: 관제 화면의 장비 번호를 그대로 입력합니다.");
     case "help auth":
@@ -102,7 +116,9 @@ export function terminalCommand(s: State, raw: string): TerminalReply {
     case "help inspect":
       return ok("inspect <확인한 발신 계정>\n감사 기록 열람 권한이 필요합니다.");
     case "help archive":
-      return ok("archive index            현재 열람 가능한 감사 색인\narchive open <ID> <코드>    확인한 문서 ID와 접근 코드를 사용합니다.");
+      return archiveEntries(s).length
+        ? ok("archive / archive index   접수된 감사 문서 목록\narchive open <ID> <코드>    확인한 문서 ID와 접근 코드를 사용합니다.\n문서 ID와 접근 코드의 단서는 관련 수신 기록에서 확인하세요.")
+        : error("현재 관제 도움말에 등록되지 않은 기능입니다.");
     case "help route":
       return knows(s, "M5")
         ? ok("route <작업> <화물 ID>\n교대 전 외부 회선 예약 기록을 참고하세요.")
@@ -112,7 +128,7 @@ export function terminalCommand(s: State, raw: string): TerminalReply {
     case "auth": {
       const parts: string[] = [];
       if (["E02", "E10"].includes(s.event) || knows(s, "M1")) parts.push(`flight (비행기록): ${has(s, "flightAuth") ? "승인" : "미승인"}`);
-      if (s.event === "E05" || everDid(s, "E05.b") || everDid(s, "E05.d")) parts.push(`photo (이미지 원본): ${has(s, "photoAuth") ? "승인" : "미승인"}`);
+      if (s.event === "E05" || everDid(s, "E05.b") || everDid(s, "E05.d")) parts.push(`photo (R-771 인수 사진 원본): ${has(s, "photoAuth") ? "승인" : "미승인"}`);
       if (knows(s, "M4") && knows(s, "M5")) parts.push(`city (시 안전망): ${has(s, "cityAuth") ? "승인" : "미승인"}`);
       if (knows(s, "M4") && has(s, "witness")) parts.push(`audit (보안감사): ${has(s, "auditAuth") ? "승인" : "미승인"}`);
       parts.push("직원 프로필: 접근 불가");
@@ -128,7 +144,7 @@ export function terminalCommand(s: State, raw: string): TerminalReply {
         : error("봉인 번호 미확인. 현장 확인이 필요합니다.");
     case "search r-771":
       return s.event === "E05" || everDid(s, "E05.b") || everDid(s, "E05.d")
-        ? ok("R-771 / 15동과 51동 표찰 불일치. 원본 사진은 별도 열람 권한이 필요합니다.")
+        ? ok("R-771 / 주문서: 15동, 인수 사진에 찍힌 건물: 51동. 원본 사진은 제한되어 있습니다. 필요한 열람 권한의 식별자는 photo입니다.")
         : error("배송 로봇 관련 사건을 아직 접수하지 않았습니다.");
     case "search mp-s17":
       return knows(s, "M4")
@@ -145,8 +161,8 @@ export function terminalCommand(s: State, raw: string): TerminalReply {
         ? ok("오늘의 비행 좌표는 이미 보관했습니다. 보관 색인: D204 / 코드 08-12")
         : ok("북쪽 경로 통신 단절, 강변 중계 정상. 비행 좌표가 오늘 자료에 추가됐습니다. 배송관제를 다시 확인하세요.\n보관 경로 /archive, 표시 D204, 사고 시각 08:12", "terminalTrace");
     case "auth request photo":
-      if (s.event !== "E05") return error("이미지 원본 권한은 오배송 조사 중에만 신청할 수 있습니다.");
-      return has(s, "photoAuth") ? ok("이미지 원본 열람이 승인된 상태입니다.") : ok("R-771 인수 사진 원본 권한 발급. 배송관제에서 원본을 보존할 수 있습니다.", "photoAuth");
+      if (s.event !== "E05") return error("인수 사진 원본 열람 권한(photo)은 오배송 조사 중에만 신청할 수 있습니다.");
+      return has(s, "photoAuth") ? ok("이미지 원본 열람이 승인된 상태입니다.") : ok("R-771 인수 사진 원본 열람 권한 승인. 배송관제에 원본 사진을 증거로 보존하는 대응이 추가되었습니다.", "photoAuth");
     case "auth request city":
       if (!working(s) || s.event !== "E01") return error("서울시 회선 신청은 교대 인수 직전(08:00)에만 가능합니다.");
       if (!knows(s, "M4") || !knows(s, "M5")) return error("승인 불가: 회선 정보와 이전 분리 실패의 복구 기록이 필요합니다.");
@@ -173,10 +189,10 @@ export function terminalCommand(s: State, raw: string): TerminalReply {
 }
 
 export const incomingAfter: Record<string, string> = {
-  "E02.a": "[D-204 사고 접수] 북쪽 경로에서 통신이 다시 끊겼습니다. 다음 교대에는 이 기체의 이전 장애 기록을 조회해 원인을 비교해 보세요.",
+  "E02.a": "[D-204 사고 접수] 북쪽 경로에서 통신이 끊겼습니다. 장애 시각 08:12 및 마지막 수신 좌표를 사고 보고서에 보존했습니다.",
   "E10.a": "[블랙박스 검수] 같은 시각의 통신 장애가 반복됩니다. 오늘의 비행기록을 열람할 권한이 있는지 확인한 뒤, D-204의 좌표 로그를 확보하세요. 보관 색인 D204 / 사고 시각 08:12",
-  "E05.b": "[R-771 재배송 사진] 원본 사진 보관 경로 /archive, 분류 R771, 사진 표찰: 51동 → 15동",
-  "E05.d": "[R-771 원본 복사] 원본 사진 보관 경로 /archive, 분류 R771, 사진 표찰: 51동 → 15동",
+  "E05.b": "[R-771 재배송 사진] 재배송은 완료됐습니다. 최초 인수 사진은 감사 자료 보관함(/archive)에 접수되었습니다.\n문서 ID: R771\n추가 조사: 보관함에서 사진 원본을 열어 이상한 촬영 기록을 확인할 수 있습니다.\n보관 서버의 접근 코드 규칙: 사진에 찍힌 동 번호-주문서의 동 번호 (하이픈으로 연결).",
+  "E05.d": "[R-771 원본 복사] 인수 사진을 감사 자료 보관함(/archive)에 보존했습니다.\n사진에 찍힌 건물: 51동 / 주문서 주소: 15동\n문서 ID: R771\n추가 조사: 보관함에서 사진 원본을 열어 서로 다른 날짜의 촬영 기록을 대조할 수 있습니다.\n보관 서버의 접근 코드 규칙: 사진에 찍힌 동 번호-주문서의 동 번호 (하이픈으로 연결).",
   "E06.b": "[현장 수신] 봉인 번호 C-918. 이 번호로 화물 기록을 조회하고, 서버의 완료 시각과 현장 위치를 비교하세요.",
   "E06.c": "[차량 수신] 환승장 봉인 C-918 확인. 화물 번호로 서버 기록을 조회해 완료 처리된 위치와 비교하세요.",
   "E06.d": "[기사 수신] 봉인 C-918 확인. 서버에서 이 화물 번호의 배송 기록을 조회해 보세요.",

@@ -920,3 +920,11 @@ body { background: radial-gradient(ellipse 70vw 46vh at 85% 12%, #251e3b 0%, tra
 .route-unlock-banner { display: grid; gap: 4px; padding: 12px; margin: 12px 0; border-radius: 7px; background: #153a3d; border: 1px solid #61968f; }
 .route-unlock-banner strong { color: #a8f4df; font-size: .91rem; }
 .route-unlock-banner span { font-size: .83rem; color: #c4dddb; }
+
+/* v8.1.1: distinguish earned actions by layout as well as color. */
+.terminal-unlocked-section { margin-top: 20px; padding-top: 14px; border-top: 1px dashed #78b7a9; }
+.terminal-unlocked-title { margin: 0 0 8px; font-size: .85rem; font-weight: 750; color: #a8f4df !important; }
+.choices .terminal-unlocked-choice { border: 1px solid #75cbbb; border-left: 4px solid #a8f4df; background: #173d42; animation: earned-action 600ms ease-out both; }
+.terminal-unlock-tag { display: block; color: #a8f4df; font: 700 .73rem var(--mono); margin-bottom: 4px; }
+@keyframes earned-action { from { opacity: .55; transform: translateY(4px); box-shadow: 0 0 15px #70d9c455; } to { opacity: 1; transform: translateY(0); box-shadow: none; } }
+@media (prefers-reduced-motion: reduce) { .choices .terminal-unlocked-choice { animation: none; } }

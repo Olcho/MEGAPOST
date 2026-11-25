@@ -1,4 +1,4 @@
-import { incomingAfter, terminalCommand, type TerminalLine } from "./terminal.ts";
+import { archiveEntries, incomingAfter, terminalCommand, type TerminalLine } from "./terminal.ts";
 import { eveBark, eveReply, type EveLine } from "./eve.ts";
 import content from "./content.json" with { type: "json" };
 export const { events, actions, memories, ends } = content;
@@ -17,6 +17,7 @@ export function fresh() {
     result: "",
     gained: [] as string[],
     secrets: [] as string[],
+    archiveKnown: [] as string[], // replay-derived; no save schema change
     eveChat: [] as EveLine[],
     terminal: [{ kind: "system", text: "MEGAPOST 내부 관제 접속. 명령어 help로 사용법을 확인하세요.", shift: 1 }] as TerminalLine[],
   };
@@ -74,6 +75,7 @@ export function step(s: State, id: string): State {
       log: s.log,
       endings: s.endings,
       secrets: s.secrets,
+      archiveKnown: archiveEntries(s).map(file => file.id),
       eveChat: [...s.eveChat.slice(-36), {role:"eve" as const, shift:s.shift+1, event:"E01", text:"새 교대가 열렸습니다. 오늘도 사원님, 아니 운영자님이라고 부르면 되나요?"}],
       terminal: [], // 회차 간 로그 출력은 초기화. 재현용 명령열과 영구 증거는 별도로 보존.
     };
